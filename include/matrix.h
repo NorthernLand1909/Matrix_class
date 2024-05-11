@@ -67,10 +67,10 @@ private:
     __float128 tol_;
 
     static const int8_t thread_num_ = 16;
-    std::thread* threads_;
 
     static void add_int8(Matrix& dest, Matrix& src1, Matrix& src2, int64_t start);
-    Matrix& add_general_thread(const Matrix& src1, const Matrix& src2, int64_t start, int64_t end);
+    static void thread_general_add(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end);
+    static void thread_general_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end);
 };
 
 template <typename T>
@@ -104,7 +104,6 @@ Matrix<T>::Matrix(int64_t rows, int64_t cols) {
     cols_offset_ = 0;
 
     data_ = std::shared_ptr<T>(new(std::align_val_t(T_size_)) T[rows_ * cols_]);
-    threads_ = new std::thread[thread_num_];
 }
 
 template <typename T>
@@ -120,7 +119,6 @@ Matrix<T>::Matrix(const Matrix& other) {
 
     data_ = std::shared_ptr(new(std::align_val_t(T_size_)) T[rows_ * cols_]);
     std::copy(other.data_.get(), other.data_.get() + rows_ * cols_, this->data_.get());
-    threads_ = new std::thread[thread_num_];
 }
 
 template <typename T>
@@ -135,7 +133,6 @@ Matrix<T>::Matrix(Matrix&& other) noexcept {
     tol_ = other.tol_;
     other.data_.reset();
     data_ = std::shared_ptr(other.data_);
-    threads_ = new std::thread[thread_num_];
 }
 
 template<typename T>
@@ -153,12 +150,10 @@ Matrix<T>::Matrix(Matrix& parent, int64_t rowStart, int64_t colStart, int64_t ro
     isFloat = parent.T_size_;
     tol_ = parent.tol_;
 
-    threads_ = new std::thread[thread_num_];
 }
 
 template <typename T>
 Matrix<T>::~Matrix() {
-    delete[] threads_;
 }
 
 template <typename T>
@@ -198,7 +193,7 @@ bool Matrix<T>::operator==(const Matrix& other) const {
     __float128 tol = tol_ > other.tol_ ? tol_ : other.tol_;
     tol = 3 * rows_ * cols_ * tol;
     for (int64_t i = 0; i < rows_ * cols_; i++) {
-        if (at(i) - other.at[i]) > tol) {
+        if (at(i) - other.at(i) > tol) {
             return false;
         }
     }
@@ -214,29 +209,33 @@ bool Matrix<T>::operator!=(const Matrix& other) const {
 template <typename T>
 Matrix<T> Matrix<T>::operator+(const Matrix& other) const {
     if (rows_ != other.rows_ || cols_ != other.cols_) {
-        std::cerr << "Matrices with different size are added." << std::endl;
-        return nullptr;
+        throw std::invalid_argument("Matrices with different sizes cannot be added.");
     }
 
     Matrix ans = Matrix(rows_, cols_);
-    int64_t unit = rows_ * cols_ / thread_num_;//have some part haven't done
+    int64_t unit = rows_ * cols_ / thread_num_;
 
     if (rows_ * cols_ % thread_num_ != 0) {
         unit++;
     }
+    std::thread* threads_ = new std::thread[thread_num_];
     
     for (int64_t i = 0; i < thread_num_; i++) {
         if (i * unit >= rows_ * cols_) {
             break;
         }
-        threads_[i](add_general_thread, *this, other, i * unit, (i + 1) * unit);
+        threads_[i] = std::thread([&ans, this, &other, i, unit]() {
+            this->thread_general_add(ans, *this, other, i * unit, (i + 1) * unit);
+        });
     }
 
     for (int64_t i = 0; i < thread_num_; i++) {
         if (i * unit >= rows_ * cols_) {
             break;
         }
-        threads_[i].join();
+        if (threads_[i].joinable()) {
+            threads_[i].join();
+        }
     }
 
 
@@ -246,14 +245,35 @@ Matrix<T> Matrix<T>::operator+(const Matrix& other) const {
 template <typename T>
 Matrix<T> Matrix<T>::operator-(const Matrix& other) const {
     if (rows_ != other.rows_ || cols_ != other.cols_) {
-        std::cerr << "Matrices with different size are subbed." << std::endl;
-        return nullptr;
+        throw std::invalid_argument("Matrices with different sizes cannot be subtracted.");
     }
 
     Matrix ans = Matrix(rows_, cols_);
-    for (int64_t i = 0; i < rows_ * cols_; i++) {
-        ans.at(i) = at(i) - other.at(i);
+    int64_t unit = rows_ * cols_ / thread_num_;
+
+    if (rows_ * cols_ % thread_num_ != 0) {
+        unit++;
     }
+    std::thread* threads_ = new std::thread[thread_num_];
+    
+    for (int64_t i = 0; i < thread_num_; i++) {
+        if (i * unit >= rows_ * cols_) {
+            break;
+        }
+        threads_[i] = std::thread([&ans, this, &other, i, unit]() {
+            this->thread_general_subtract(ans, *this, other, i * unit, (i + 1) * unit);
+        });
+    }
+
+    for (int64_t i = 0; i < thread_num_; i++) {
+        if (i * unit >= rows_ * cols_) {
+            break;
+        }
+        if (threads_[i].joinable()) {
+            threads_[i].join();
+        }
+    }
+
 
     return ans;
 }
@@ -261,15 +281,16 @@ Matrix<T> Matrix<T>::operator-(const Matrix& other) const {
 template <typename T>
 Matrix<T> Matrix<T>::operator*(const Matrix& other) const {
     if (cols_ != other.rows_) {
-        std::cerr << "Matrices with incorrect size are multiplied." << std::endl;
-        return nullptr;
+        throw std::invalid_argument("Matrices with incorrect size are multiplied.");
     }
 
     Matrix ans = Matrix(rows_, other.cols_);
-    ans.data_ = {0};
+    std::fill_n(data_.get(), rows_ * cols_, static_cast<T>(0));
+    //printf("rows_ = %ld, othercols = %ld, cols = %ld\n", rows_, other.cols_, cols_);
     for (int64_t i = 0; i < rows_; i++) {
         for (int64_t j = 0; j < other.cols_; j++) {
             for (int64_t k = 0; k < cols_; k++) {
+                //printf("i = %ld, j = %ld, k = %ld\n", i, j, k);
                 ans.at(i, j) += at(i, k) * other.at(k, j);
             }
         }
@@ -282,22 +303,24 @@ Matrix<T> Matrix<T>::operator*(const Matrix& other) const {
 
 template <typename T>
 T& Matrix<T>::at(int64_t row, int64_t col) {
-    return data_[(row + rows_offset_) * rows_ + col + cols_offset_];
+    //printf("find %ld\n", (row + rows_offset_) * cols_ + col + cols_offset_);
+    return data_.get()[(row + rows_offset_) * cols_ + col + cols_offset_];
 }
 
 template <typename T>
 const T& Matrix<T>::at(int64_t row, int64_t col) const {
-    return data_[(row + rows_offset_) * rows_ + col + cols_offset_];
+    //printf("find %ld\n", (row + rows_offset_) * cols_ + col + cols_offset_);
+    return data_.get()[(row + rows_offset_) * cols_ + col + cols_offset_];
 }
 
 template <typename T>
 T& Matrix<T>::at(int64_t pos) {
-    return data_[pos + rows_offset_ + cols_offset_];
+    return data_.get()[pos + rows_offset_ + cols_offset_];
 }
 
 template <typename T>
 const T& Matrix<T>::at(int64_t pos) const {
-    return data_[pos + rows_offset_ + cols_offset_];
+    return data_.get()[pos + rows_offset_ + cols_offset_];
 }
 
 template <typename T>
@@ -336,16 +359,22 @@ void Matrix<T>::write_command() {
     }
 }
 
-template <>
-Matrix<int8_t> Matrix<int8_t>::operator+(const Matrix<int8_t>& other) const {
+// template <>
+// Matrix<int8_t> Matrix<int8_t>::operator+(const Matrix<int8_t>& other) const {
 
+// }
+
+template <typename T>
+void Matrix<T>::thread_general_add(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end) {
+    for (int64_t i = start; i < end && i < src1.rows_ * src1.cols_; i++) {
+        dest.at(i) = src1.at(i) + src2.at(i);
+    }
 }
 
 template <typename T>
-Matrix<T>& Matrix<T>::add_general_thread(const Matrix& src1, const Matrix& src2, int64_t start, int64_t end) {
+void Matrix<T>::thread_general_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end) {
     for (int64_t i = start; i < end && i < src1.rows_ * src1.cols_; i++) {
-        this->at(i) = src1.at(i) + src2.at(i);
+        dest.at(i) = src1.at(i) - src2.at(i);
     }
-    return *this;
 }
 #endif // MATRIX_H
