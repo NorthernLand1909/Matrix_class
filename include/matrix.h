@@ -71,6 +71,7 @@ private:
     static void add_int8(Matrix& dest, Matrix& src1, Matrix& src2, int64_t start);
     static void thread_general_add(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end);
     static void thread_general_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end);
+    static void thread_general_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t num, bool isRow);
 };
 
 template <typename T>
@@ -237,7 +238,7 @@ Matrix<T> Matrix<T>::operator+(const Matrix& other) const {
             threads_[i].join();
         }
     }
-
+    delete[] threads_;
 
     return ans;
 }
@@ -273,10 +274,12 @@ Matrix<T> Matrix<T>::operator-(const Matrix& other) const {
             threads_[i].join();
         }
     }
-
+    delete[] threads_;
 
     return ans;
 }
+
+
 
 template <typename T>
 Matrix<T> Matrix<T>::operator*(const Matrix& other) const {
@@ -285,20 +288,30 @@ Matrix<T> Matrix<T>::operator*(const Matrix& other) const {
     }
 
     Matrix ans = Matrix(rows_, other.cols_);
+    std::thread* threads_ = new std::thread[thread_num_];
     std::fill_n(data_.get(), rows_ * cols_, static_cast<T>(0));
-    //printf("rows_ = %ld, othercols = %ld, cols = %ld\n", rows_, other.cols_, cols_);
-    for (int64_t i = 0; i < rows_; i++) {
-        for (int64_t j = 0; j < other.cols_; j++) {
-            for (int64_t k = 0; k < cols_; k++) {
-                //printf("i = %ld, j = %ld, k = %ld\n", i, j, k);
-                ans.at(i, j) += at(i, k) * other.at(k, j);
-            }
+    if (rows_ < other.cols_) {
+        for (int i = 0; i < rows_; i += thread_num_) {
+            threads_[i] = std::thread([&ans, this, &other, i]() {
+                this->thread_general_mul(ans, *this, other, i, true);
+            });
+        }
+    } else {
+        for (int i = 0; i < cols_; i += thread_num_) {
+            threads_[i] = std::thread([&ans, this, &other, i]() {
+                this->thread_general_mul(ans, *this, other, i, false);
+            });
         }
     }
+
+    for (int64_t i = 0; i < thread_num_; i++) {
+        if (threads_[i].joinable()) {
+            threads_[i].join();
+        }
+    }
+    delete[] threads_;
     return ans;
 }
-
-
 
 
 template <typename T>
@@ -375,6 +388,23 @@ template <typename T>
 void Matrix<T>::thread_general_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end) {
     for (int64_t i = start; i < end && i < src1.rows_ * src1.cols_; i++) {
         dest.at(i) = src1.at(i) - src2.at(i);
+    }
+}
+
+template <typename T>
+void Matrix<T>::thread_general_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t num, bool isRow) {
+    if (isRow) {
+        for (int64_t i = 0; i < src2.cols_; i++) {
+            for (int64_t j = 0; j < src1.cols_; j++) {
+                dest.at(num, i) += src1.at(num, j) * src2.at(j, i);
+            }
+        }
+    } else {
+        for (int64_t i = 0; i < src1.rows_; i++) {
+            for (int64_t j = 0; j < src1.cols_; j++) {
+                dest.at(i, num) += src1.at(i, j) * src2.at(j, num);
+            }
+        }
     }
 }
 #endif // MATRIX_H

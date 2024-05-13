@@ -66,7 +66,7 @@ void test_mul(double *arr1, double* arr2) {
     Matrix<double> ans = src1 * src2;
     
 
-    double* arr3 = new double[20];
+    double* arr3 = new double[25];
     memset(arr3, 0.0f, 20);
     for (int i = 0; i < 5; i++) {
         for (int j = 0; j < 5; j++) {
