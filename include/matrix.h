@@ -10,8 +10,6 @@
 #include <immintrin.h>
 #include <thread>
 
-#include "AlignedAllocator.h"
-
 #pragma GCC target("avx2")
 
 //Todo:
@@ -23,32 +21,32 @@ public:
     Matrix(int64_t rows, int64_t cols);
     Matrix(const Matrix& other); // for copy
     Matrix(Matrix&& other) noexcept; // for move
-    Matrix(Matrix& parent, int64_t rowStart, int64_t colStart, int64_t rowEnd, int64_t colEnd);
+    Matrix(Matrix& parent, int64_t rowStart, int64_t colStart, int64_t rowEnd, int64_t colEnd); // for ROI
     ~Matrix();
 
     // for operator =
-    Matrix& operator=(const Matrix& other);
-    Matrix& operator=(Matrix&& other) noexcept;
+    Matrix& operator=(const Matrix& other); // for copy
+    Matrix& operator=(Matrix&& other) noexcept; // for move
 
     // for comparsion
+    // only matrices with the same size are supported!
     bool operator==(const Matrix& other) const;
     bool operator!=(const Matrix& other) const;
 
     // for arthimetic
+    // only matrices with correct size are supported!
     Matrix operator+(const Matrix& other) const;
     Matrix operator-(const Matrix& other) const;
     Matrix operator*(const Matrix& other) const;
 
-    // for ROI
-    Matrix getROI(int64_t rowStart, int64_t colStart, int64_t rowEnd, int64_t colEnd) const;
 
     // others
     T& at(int64_t row, int64_t col); // look for element
-    T& at(int64_t pos);
-    const T& at(int64_t row, int64_t col) const; // 访问元素（常量版本）
+    T& at(int64_t pos); // directly look for corresponding position of the array
+    const T& at(int64_t row, int64_t col) const;
     const T& at(int64_t pos) const;
 
-    // input and outputs
+    // IO
     void read_file(std::ifstream& file);
     void read_command();
 
@@ -62,16 +60,15 @@ private:
     int64_t cols_offset_;
     std::shared_ptr<T> data_;
 
-    int8_t T_size_;
+    int8_t T_size_; // The size used for aligned memory allocated
     bool isFloat;
-    __float128 tol_;
+    __float128 tol_; // Judging for equlity
 
-    static const int8_t thread_num_ = 16;
+    static const int8_t thread_num_ = 16; // thread numbers
 
-    static void add_int8(Matrix& dest, Matrix& src1, Matrix& src2, int64_t start);
-    static void thread_general_add(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end);
-    static void thread_general_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end);
-    static void thread_general_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t num, bool isRow);
+    static void thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end);
+    static void thread_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end);
+    static void thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& num, const bool& isRow);
 };
 
 template <typename T>
@@ -226,7 +223,7 @@ Matrix<T> Matrix<T>::operator+(const Matrix& other) const {
             break;
         }
         threads_[i] = std::thread([&ans, this, &other, i, unit]() {
-            this->thread_general_add(ans, *this, other, i * unit, (i + 1) * unit);
+            this->thread_add(ans, *this, other, i * unit, (i + 1) * unit);
         });
     }
 
@@ -262,7 +259,7 @@ Matrix<T> Matrix<T>::operator-(const Matrix& other) const {
             break;
         }
         threads_[i] = std::thread([&ans, this, &other, i, unit]() {
-            this->thread_general_subtract(ans, *this, other, i * unit, (i + 1) * unit);
+            this->thread_subtract(ans, *this, other, i * unit, (i + 1) * unit);
         });
     }
 
@@ -293,13 +290,13 @@ Matrix<T> Matrix<T>::operator*(const Matrix& other) const {
     if (rows_ < other.cols_) {
         for (int i = 0; i < rows_; i += thread_num_) {
             threads_[i] = std::thread([&ans, this, &other, i]() {
-                this->thread_general_mul(ans, *this, other, i, true);
+                this->thread_mul(ans, *this, other, i, true);
             });
         }
     } else {
         for (int i = 0; i < cols_; i += thread_num_) {
             threads_[i] = std::thread([&ans, this, &other, i]() {
-                this->thread_general_mul(ans, *this, other, i, false);
+                this->thread_mul(ans, *this, other, i, false);
             });
         }
     }
@@ -372,27 +369,22 @@ void Matrix<T>::write_command() {
     }
 }
 
-// template <>
-// Matrix<int8_t> Matrix<int8_t>::operator+(const Matrix<int8_t>& other) const {
-
-// }
-
 template <typename T>
-void Matrix<T>::thread_general_add(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end) {
+void Matrix<T>::thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end) {
     for (int64_t i = start; i < end && i < src1.rows_ * src1.cols_; i++) {
         dest.at(i) = src1.at(i) + src2.at(i);
     }
 }
 
 template <typename T>
-void Matrix<T>::thread_general_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t start, int64_t end) {
+void Matrix<T>::thread_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end) {
     for (int64_t i = start; i < end && i < src1.rows_ * src1.cols_; i++) {
         dest.at(i) = src1.at(i) - src2.at(i);
     }
 }
 
 template <typename T>
-void Matrix<T>::thread_general_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, int64_t num, bool isRow) {
+void Matrix<T>::thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& num, const bool& isRow) {
     if (isRow) {
         for (int64_t i = 0; i < src2.cols_; i++) {
             for (int64_t j = 0; j < src1.cols_; j++) {
@@ -407,4 +399,67 @@ void Matrix<T>::thread_general_mul(Matrix& dest, const Matrix& src1, const Matri
         }
     }
 }
+
+template <>
+void Matrix<int8_t>::thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end) {
+    int64_t num = (std::min(end, src1.rows_ * src1.cols_) - start) / 128;
+    __m256i ymm[12];
+    for (int64_t i = num; i < num; i++) {
+        ymm[0] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 128));
+        ymm[1] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 128 + 32));
+        ymm[2] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 128 + 64));
+        ymm[3] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 128 + 96));
+
+        ymm[4] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 128));
+        ymm[5] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 128 + 32));
+        ymm[6] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 128 + 64));
+        ymm[7] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 128 + 96));
+
+        ymm[8] = _mm256_add_epi8(ymm[0], ymm[4]);
+        ymm[9] = _mm256_add_epi8(ymm[1], ymm[5]);
+        ymm[10] = _mm256_add_epi8(ymm[2], ymm[6]);
+        ymm[11] = _mm256_add_epi8(ymm[3], ymm[7]);
+
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 128), ymm[8]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 128 + 32), ymm[9]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 128 + 64), ymm[10]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 128 + 96), ymm[11]);
+    }
+
+    for (int64_t i = start + num * 128; i < end && i < src1.rows_ * src1.cols_; i++) {
+        dest.at(i) = src1.at(i) + src2.at(i);
+    }
+}
+
+template <>
+void Matrix<int32_t>::thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end) {
+    int64_t num = (std::min(end, src1.rows_ * src1.cols_) - start) / 32;
+    __m256i ymm[12];
+    for (int64_t i = num; i < num; i++) {
+        ymm[0] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 32));
+        ymm[1] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 32 + 8));
+        ymm[2] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 32 + 16));
+        ymm[3] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 32 + 24));
+
+        ymm[4] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 32));
+        ymm[5] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 32 + 8));
+        ymm[6] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 32 + 16));
+        ymm[7] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 32 + 24));
+
+        ymm[8] = _mm256_add_epi32(ymm[0], ymm[4]);
+        ymm[9] = _mm256_add_epi32(ymm[1], ymm[5]);
+        ymm[10] = _mm256_add_epi32(ymm[2], ymm[6]);
+        ymm[11] = _mm256_add_epi32(ymm[3], ymm[7]);
+
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 32), ymm[8]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 32 + 8), ymm[9]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 32 + 16), ymm[10]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 32 + 24), ymm[11]);
+    }
+
+    for (int64_t i = start + num * 32; i < end && i < src1.rows_ * src1.cols_; i++) {
+        dest.at(i) = src1.at(i) + src2.at(i);
+    }
+}
+
 #endif // MATRIX_H
