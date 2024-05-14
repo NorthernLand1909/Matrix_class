@@ -12,7 +12,7 @@
 
 #pragma GCC target("avx2")
 
-//Todo:
+//Todo: add an error when try to get elements out of range
 
 template <typename T>
 class Matrix {
@@ -68,7 +68,7 @@ private:
 
     static void thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end);
     static void thread_subtract(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end);
-    static void thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& num, const bool& isRow);
+    static void thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t num, const bool& isRow);
 };
 
 template <typename T>
@@ -286,20 +286,13 @@ Matrix<T> Matrix<T>::operator*(const Matrix& other) const {
 
     Matrix ans = Matrix(rows_, other.cols_);
     std::thread* threads_ = new std::thread[thread_num_];
-    std::fill_n(data_.get(), rows_ * cols_, static_cast<T>(0));
-    if (rows_ < other.cols_) {
-        for (int i = 0; i < rows_; i += thread_num_) {
-            threads_[i] = std::thread([&ans, this, &other, i]() {
-                this->thread_mul(ans, *this, other, i, true);
-            });
-        }
-    } else {
-        for (int i = 0; i < cols_; i += thread_num_) {
-            threads_[i] = std::thread([&ans, this, &other, i]() {
-                this->thread_mul(ans, *this, other, i, false);
-            });
-        }
+    std::fill_n(ans.data_.get(), rows_ * other.cols_, static_cast<T>(0));
+    for (int i = 0; i < thread_num_; i++) {
+        threads_[i] = std::thread([&, this, i]() {
+            this->thread_mul(ans, *this, other, i, rows_ >= other.cols_);
+        });
     }
+
 
     for (int64_t i = 0; i < thread_num_; i++) {
         if (threads_[i].joinable()) {
@@ -314,6 +307,9 @@ Matrix<T> Matrix<T>::operator*(const Matrix& other) const {
 template <typename T>
 T& Matrix<T>::at(int64_t row, int64_t col) {
     //printf("find %ld\n", (row + rows_offset_) * cols_ + col + cols_offset_);
+    if (row > rows_ || col > cols_) {
+        throw std::invalid_argument("Matrix index out of bound");
+    }
     return data_.get()[(row + rows_offset_) * cols_ + col + cols_offset_];
 }
 
@@ -325,12 +321,12 @@ const T& Matrix<T>::at(int64_t row, int64_t col) const {
 
 template <typename T>
 T& Matrix<T>::at(int64_t pos) {
-    return data_.get()[pos + rows_offset_ + cols_offset_];
+    return data_.get()[pos + rows_offset_ * cols_ + cols_offset_];
 }
 
 template <typename T>
 const T& Matrix<T>::at(int64_t pos) const {
-    return data_.get()[pos + rows_offset_ + cols_offset_];
+    return data_.get()[pos + rows_offset_ * cols_ + cols_offset_];
 }
 
 template <typename T>
@@ -362,11 +358,12 @@ void Matrix<T>::write_file(std::ofstream& file) {
 template <typename T>
 void Matrix<T>::write_command() {
     for (int64_t i = 0; i < rows_ * cols_; i++) {
-        std::cout >> at(i) >> " ";
-        if (i % rows_ == 0 && i != 0) {
+        std::cout << at(i) << " ";
+        if ((i + 1) % rows_ == 0) {
             std::cout << std::endl;
         }
     }
+    std::cout << std::endl;
 }
 
 template <typename T>
@@ -384,17 +381,27 @@ void Matrix<T>::thread_subtract(Matrix& dest, const Matrix& src1, const Matrix& 
 }
 
 template <typename T>
-void Matrix<T>::thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& num, const bool& isRow) {
+void Matrix<T>::thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t num, const bool& isRow) {
     if (isRow) {
-        for (int64_t i = 0; i < src2.cols_; i++) {
-            for (int64_t j = 0; j < src1.cols_; j++) {
-                dest.at(num, i) += src1.at(num, j) * src2.at(j, i);
+        if (num >= src1.rows_) {
+            return;
+        }
+        for (int64_t i = num; i < src1.rows_; i += thread_num_) {
+            for (int64_t j = 0; j < src2.cols_; j++) {
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    dest.at(i, j) += src1.at(i, k) * src2.at(k, j);
+                }
             }
         }
     } else {
-        for (int64_t i = 0; i < src1.rows_; i++) {
-            for (int64_t j = 0; j < src1.cols_; j++) {
-                dest.at(i, num) += src1.at(i, j) * src2.at(j, num);
+        if (num >= src2.cols_) {
+            return;
+        }
+        for (int64_t i = num; i < src2.cols_; i += thread_num_) {
+            for (int64_t j = 0; j < src1.rows_; j++) {
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    dest.at(i, j) += src1.at(i, k) * src2.at(k, j);
+                }
             }
         }
     }
@@ -458,6 +465,99 @@ void Matrix<int32_t>::thread_add(Matrix& dest, const Matrix& src1, const Matrix&
     }
 
     for (int64_t i = start + num * 32; i < end && i < src1.rows_ * src1.cols_; i++) {
+        dest.at(i) = src1.at(i) + src2.at(i);
+    }
+}
+
+template <>
+void Matrix<int64_t>::thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end) {
+    int64_t num = (std::min(end, src1.rows_ * src1.cols_) - start) / 16;
+    __m256i ymm[12];
+    for (int64_t i = num; i < num; i++) {
+        ymm[0] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 16));
+        ymm[1] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 16 + 4));
+        ymm[2] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 16 + 8));
+        ymm[3] = _mm256_loadu_si256((__m256i*)&src1.at(start + num * 16 + 12));
+
+        ymm[4] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 16));
+        ymm[5] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 16 + 4));
+        ymm[6] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 16 + 8));
+        ymm[7] = _mm256_loadu_si256((__m256i*)&src2.at(start + num * 16 + 12));
+
+        ymm[8] = _mm256_add_epi64(ymm[0], ymm[4]);
+        ymm[9] = _mm256_add_epi64(ymm[1], ymm[5]);
+        ymm[10] = _mm256_add_epi64(ymm[2], ymm[6]);
+        ymm[11] = _mm256_add_epi64(ymm[3], ymm[7]);
+
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 16), ymm[8]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 16 + 4), ymm[9]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 16 + 8), ymm[10]);
+        _mm256_storeu_si256((__m256i*)&dest.at(start + num * 16 + 12), ymm[11]);
+    }
+
+    for (int64_t i = start + num * 16; i < end && i < src1.rows_ * src1.cols_; i++) {
+        dest.at(i) = src1.at(i) + src2.at(i);
+    }
+}
+
+template <>
+void Matrix<_Float32>::thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end) {
+    int64_t num = (std::min(end, src1.rows_ * src1.cols_) - start) / 32;
+    __m256 ymm[12];
+    for (int64_t i = num; i < num; i++) {
+        ymm[0] = _mm256_load_ps(&src1.at(start + num * 32));
+        ymm[1] = _mm256_load_ps(&src1.at(start + num * 32 + 8));
+        ymm[2] = _mm256_load_ps(&src1.at(start + num * 32 + 16));
+        ymm[3] = _mm256_load_ps(&src1.at(start + num * 32 + 24));
+
+        ymm[4] = _mm256_load_ps(&src2.at(start + num * 32));
+        ymm[5] = _mm256_load_ps(&src2.at(start + num * 32 + 8));
+        ymm[6] = _mm256_load_ps(&src2.at(start + num * 32 + 16));
+        ymm[7] = _mm256_load_ps(&src2.at(start + num * 32 + 24));
+
+        ymm[8] = _mm256_add_ps(ymm[0], ymm[4]);
+        ymm[9] = _mm256_add_ps(ymm[1], ymm[5]);
+        ymm[10] = _mm256_add_ps(ymm[2], ymm[6]);
+        ymm[11] = _mm256_add_ps(ymm[3], ymm[7]);
+
+        _mm256_store_ps(&dest.at(start + num * 32), ymm[8]);
+        _mm256_store_ps(&dest.at(start + num * 32 + 8), ymm[9]);
+        _mm256_store_ps(&dest.at(start + num * 32 + 16), ymm[10]);
+        _mm256_store_ps(&dest.at(start + num * 32 + 24), ymm[11]);
+    }
+
+    for (int64_t i = start + num * 32; i < end && i < src1.rows_ * src1.cols_; i++) {
+        dest.at(i) = src1.at(i) + src2.at(i);
+    }
+}
+
+template <>
+void Matrix<_Float64>::thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t& start, const int64_t& end) {
+    int64_t num = (std::min(end, src1.rows_ * src1.cols_) - start) / 16;
+    __m256d ymm[12];
+    for (int64_t i = num; i < num; i++) {
+        ymm[0] = _mm256_load_pd(&src1.at(start + num * 16));
+        ymm[1] = _mm256_load_pd(&src1.at(start + num * 16 + 4));
+        ymm[2] = _mm256_load_pd(&src1.at(start + num * 16 + 8));
+        ymm[3] = _mm256_load_pd(&src1.at(start + num * 16 + 12));
+
+        ymm[4] = _mm256_load_pd(&src2.at(start + num * 16));
+        ymm[5] = _mm256_load_pd(&src2.at(start + num * 16 + 4));
+        ymm[6] = _mm256_load_pd(&src2.at(start + num * 16 + 8));
+        ymm[7] = _mm256_load_pd(&src2.at(start + num * 16 + 12));
+
+        ymm[8] = _mm256_add_pd(ymm[0], ymm[4]);
+        ymm[9] = _mm256_add_pd(ymm[1], ymm[5]);
+        ymm[10] = _mm256_add_pd(ymm[2], ymm[6]);
+        ymm[11] = _mm256_add_pd(ymm[3], ymm[7]);
+
+        _mm256_store_pd(&dest.at(start + num * 16), ymm[8]);
+        _mm256_store_pd(&dest.at(start + num * 16 + 4), ymm[9]);
+        _mm256_store_pd(&dest.at(start + num * 16 + 8), ymm[10]);
+        _mm256_store_pd(&dest.at(start + num * 16 + 12), ymm[11]);
+    }
+
+    for (int64_t i = start + num * 16; i < end && i < src1.rows_ * src1.cols_; i++) {
         dest.at(i) = src1.at(i) + src2.at(i);
     }
 }
