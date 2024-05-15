@@ -8,7 +8,7 @@ double* generate_arr(int size, double min, double max) {
     std::uniform_real_distribution<> distr_ai(min, max);
     double* ans = new double[size];
     for (int i = 0; i < size; i++) {
-        ans[i] = 1;
+        ans[i] = distr_ai(eng);
     }
     return ans;
 }
@@ -94,6 +94,10 @@ void test_mul(double *arr1, double* arr2, int row1, int col1, int col2) {
         double diff = abs(arr3[i] - ans.at(i));
         max_diff = std::max(max_diff, diff);
     }
+
+    // print_ma(arr3, row1, col2);
+    // ans.write_command();
+
     delete[] arr3;
 
     printf("The max_diff of multiplying is %lf\n", max_diff);
@@ -103,12 +107,12 @@ void test_mul(double *arr1, double* arr2, int row1, int col1, int col2) {
 
 int main() {
     //generate arr
-    double* arr1 = generate_arr(20, -1, 1);
-    double* arr2 = generate_arr(20, -1, 1);
+    double* arr1 = generate_arr(2000, -1, 1);
+    double* arr2 = generate_arr(2000, -1, 1);
 
-    test_add(arr1, arr2, 5, 4);
-    test_minus(arr1, arr2, 5, 4);
-    test_mul(arr1, arr2, 5, 4, 5);
+    test_add(arr1, arr2, 50, 40);
+    test_minus(arr1, arr2, 50, 40);
+    test_mul(arr1, arr2, 50, 40, 50);
 
     delete[] arr1;
     delete[] arr2;
