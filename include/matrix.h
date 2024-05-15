@@ -10,8 +10,6 @@
 #include <immintrin.h>
 #include <thread>
 
-#pragma GCC target("avx2")
-
 //Todo: add an error when try to get elements out of range
 
 template <typename T>
@@ -67,7 +65,7 @@ private:
 
     static void thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t start, const int64_t end);
     static void thread_sub(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t start, const int64_t end);
-    static void thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t num, const bool isRow);
+    static void thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t start, const bool isRow);
 };
 
 template <typename T>
@@ -383,29 +381,32 @@ void Matrix<T>::thread_sub(Matrix& dest, const Matrix& src1, const Matrix& src2,
 }
 
 template <typename T>
-void Matrix<T>::thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t num, const bool isRow) {
-    if (isRow) {
-        if (num >= src1.rows_) {
+void Matrix<T>::thread_mul(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t start, const bool isRow) {
+    if (isRow) { // 如果行数更多，按行分割
+        if (start >= src1.rows_) { // 如果起点超出范围，直接返回
             return;
         }
-        for (int64_t i = num; i < src1.rows_; i += thread_num_) {
+            // 三重循环，计算从start_到start_ + num行的结果
+        for (int64_t i = start; i < src1.rows_; i += thread_num_) {
             for (int64_t j = 0; j < src2.cols_; j++) {
                 for (int64_t k = 0; k < src1.cols_; k++) {
                     dest.at(i, j) += src1.at(i, k) * src2.at(k, j);
                 }
             }
         }
-    } else {
-        if (num >= src2.cols_) {
+
+    } else {// 列数更多，则按列分割
+        if (start >= src2.cols_) {
             return;
         }
-        for (int64_t i = num; i < src2.cols_; i += thread_num_) {
+        for (int64_t i = start; i < src2.cols_; i += thread_num_) {
             for (int64_t j = 0; j < src1.rows_; j++) {
                 for (int64_t k = 0; k < src1.cols_; k++) {
                     dest.at(i, j) += src1.at(i, k) * src2.at(k, j);
                 }
             }
         }
+
     }
 }
 
@@ -522,10 +523,10 @@ void Matrix<_Float32>::thread_add(Matrix& dest, const Matrix& src1, const Matrix
         ymm[10] = _mm256_add_ps(ymm[2], ymm[6]);
         ymm[11] = _mm256_add_ps(ymm[3], ymm[7]);
 
-        _mm256_store_ps(&dest.at(start + i * 32), ymm[8]);
-        _mm256_store_ps(&dest.at(start + i * 32 + 8), ymm[9]);
-        _mm256_store_ps(&dest.at(start + i * 32 + 16), ymm[10]);
-        _mm256_store_ps(&dest.at(start + i * 32 + 24), ymm[11]);
+        _mm256_storeu_ps(&dest.at(start + i * 32), ymm[8]);
+        _mm256_storeu_ps(&dest.at(start + i * 32 + 8), ymm[9]);
+        _mm256_storeu_ps(&dest.at(start + i * 32 + 16), ymm[10]);
+        _mm256_storeu_ps(&dest.at(start + i * 32 + 24), ymm[11]);
     }
 
     for (int64_t i = start + num * 32; i < end && i < src1.rows_ * src1.cols_; i++) {
@@ -592,7 +593,7 @@ void Matrix<int8_t>::thread_sub(Matrix& dest, const Matrix& src1, const Matrix& 
     }
 
     for (int64_t i = start + num * 128; i < end && i < src1.rows_ * src1.cols_; i++) {
-        dest.at(i) = src1.at(i) + src2.at(i);
+        dest.at(i) = src1.at(i) - src2.at(i);
     }
 }
 
@@ -623,7 +624,7 @@ void Matrix<int32_t>::thread_sub(Matrix& dest, const Matrix& src1, const Matrix&
     }
 
     for (int64_t i = start + num * 32; i < end && i < src1.rows_ * src1.cols_; i++) {
-        dest.at(i) = src1.at(i) + src2.at(i);
+        dest.at(i) = src1.at(i) - src2.at(i);
     }
 }
 
@@ -654,7 +655,7 @@ void Matrix<int64_t>::thread_sub(Matrix& dest, const Matrix& src1, const Matrix&
     }
 
     for (int64_t i = start + num * 16; i < end && i < src1.rows_ * src1.cols_; i++) {
-        dest.at(i) = src1.at(i) + src2.at(i);
+        dest.at(i) = src1.at(i) - src2.at(i);
     }
 }
 
@@ -678,14 +679,14 @@ void Matrix<_Float32>::thread_sub(Matrix& dest, const Matrix& src1, const Matrix
         ymm[10] = _mm256_sub_ps(ymm[2], ymm[6]);
         ymm[11] = _mm256_sub_ps(ymm[3], ymm[7]);
 
-        _mm256_store_ps(&dest.at(start + i * 32), ymm[8]);
-        _mm256_store_ps(&dest.at(start + i * 32 + 8), ymm[9]);
-        _mm256_store_ps(&dest.at(start + i * 32 + 16), ymm[10]);
-        _mm256_store_ps(&dest.at(start + i * 32 + 24), ymm[11]);
+        _mm256_storeu_ps(&dest.at(start + i * 32), ymm[8]);
+        _mm256_storeu_ps(&dest.at(start + i * 32 + 8), ymm[9]);
+        _mm256_storeu_ps(&dest.at(start + i * 32 + 16), ymm[10]);
+        _mm256_storeu_ps(&dest.at(start + i * 32 + 24), ymm[11]);
     }
 
     for (int64_t i = start + num * 32; i < end && i < src1.rows_ * src1.cols_; i++) {
-        dest.at(i) = src1.at(i) + src2.at(i);
+        dest.at(i) = src1.at(i) - src2.at(i);
     }
 }
 
@@ -717,7 +718,158 @@ void Matrix<_Float64>::thread_sub(Matrix& dest, const Matrix& src1, const Matrix
     }
 
     for (int64_t i = start + num * 16; i < end && i < src1.rows_ * src1.cols_; i++) {
-        dest.at(i) = src1.at(i) + src2.at(i);
+        dest.at(i) = src1.at(i) - src2.at(i);
+    }
+}
+
+template <>
+void Matrix<int32_t>::thread_mul(Matrix<int32_t>& dest, const Matrix<int32_t>& src1, const Matrix<int32_t>& src2, const int64_t start, const bool isRow) {
+    const int block_size = 8;
+
+    if (isRow) {
+        if (start >= src1.rows_) return;
+
+        for (int64_t i = start; i < src1.rows_; i += thread_num_) {
+            for (int64_t j = 0; j < src2.cols_ / block_size * block_size; j += block_size) {
+                __m256i sum = _mm256_setzero_si256();
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    __m256i a = _mm256_set1_epi32(src1.at(i, k));
+                    __m256i b = _mm256_loadu_si256((__m256i*)&src2.at(k, j));
+                    __m256i prod = _mm256_mullo_epi32(a, b);
+                    sum = _mm256_add_epi32(sum, prod);
+                }
+                _mm256_storeu_si256((__m256i*)&dest.at(i, j), sum);
+            }
+            // Handle remainder of columns
+            for (int64_t j = src2.cols_ / block_size * block_size; j < src2.cols_; ++j) {
+                int32_t sum = 0;
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    sum += src1.at(i, k) * src2.at(k, j);
+                }
+                dest.at(i, j) = sum;
+            }
+        }
+    } else {
+        if (start >= src2.cols_) return;
+
+        for (int64_t j = start; j < src2.cols_; j += thread_num_) {
+            for (int64_t i = 0; i < src1.rows_; i++) {
+                __m256i sum = _mm256_setzero_si256();
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    __m256i a = _mm256_set1_epi32(src1.at(i, k));
+                    __m256i b = _mm256_loadu_si256((__m256i*)&src2.at(k, j));
+                    __m256i prod = _mm256_mullo_epi32(a, b);
+                    sum = _mm256_add_epi32(sum, prod);
+                }
+                // Check if we need to store less than 8 elements
+                if (j + block_size <= src2.cols_) {
+                    _mm256_storeu_si256((__m256i*)&dest.at(i, j), sum);
+                } else {
+                    // Store the remaining elements one by one
+                    for (int rem = 0; rem < src2.cols_ % block_size; ++rem) {
+                        dest.at(i, j + rem) = sum[rem]; // pseudo-code for direct element access in _mm256
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+
+template <>
+void Matrix<_Float32>::thread_mul(Matrix<_Float32>& dest, const Matrix<_Float32>& src1, const Matrix<_Float32>& src2, const int64_t start, const bool isRow) {
+    const int block_size = 8;
+
+    if (isRow) {
+        if (start >= src1.rows_) return;
+
+        for (int64_t i = start; i < src1.rows_; i += thread_num_) {
+            for (int64_t j = 0; j < src2.cols_ / block_size * block_size; j += block_size) {
+                __m256 sum = _mm256_setzero_ps();
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    __m256 a = _mm256_broadcast_ss(&src1.at(i, k));
+                    __m256 b = _mm256_loadu_ps(&src2.at(k, j));
+                    sum = _mm256_fmadd_ps(a, b, sum);
+                }
+                _mm256_storeu_ps(&dest.at(i, j), sum);
+            }
+            // Handle remainder of columns
+            for (int64_t j = src2.cols_ / block_size * block_size; j < src2.cols_; ++j) {
+                _Float32 sum = 0.0;
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    sum += src1.at(i, k) * src2.at(k, j);
+                }
+                dest.at(i, j) = sum;
+            }
+        }
+    } else {
+        if (start >= src2.cols_) return;
+
+        for (int64_t j = start; j < src2.cols_; j += thread_num_) {
+            for (int64_t i = 0; i < src1.rows_; i++) {
+                __m256 sum = _mm256_setzero_ps();
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    __m256 a = _mm256_broadcast_ss(&src1.at(i, k));
+                    __m256 b = _mm256_loadu_ps(&src2.at(k, j));
+                    sum = _mm256_fmadd_ps(a, b, sum);
+                }
+                // Check if we need to store less than 8 elements
+                if (j + block_size <= src2.cols_) {
+                    _mm256_storeu_ps(&dest.at(i, j), sum);
+                } else {
+                    // Store the remaining elements one by one
+                    for (int rem = 0; rem < src2.cols_ % block_size; ++rem) {
+                        dest.at(i, j + rem) = sum[rem]; // pseudo-code for direct element access in _mm256
+                    }
+                }
+            }
+        }
+    }
+}
+
+template <>
+void Matrix<_Float64>::thread_mul(Matrix<_Float64>& dest, const Matrix<_Float64>& src1, const Matrix<_Float64>& src2, const int64_t start, const bool isRow) {
+    const int block_size = 4; // 使用256位寄存器存储4个_Float64类型数据
+
+    if (isRow) {
+        if (start >= src1.rows_) return;
+
+        for (int64_t i = start; i < src1.rows_; i += thread_num_) {
+            for (int64_t j = 0; j < src2.cols_ / block_size * block_size; j += block_size) {
+                __m256d sum = _mm256_setzero_pd();
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    __m256d a = _mm256_set1_pd(src1.at(i, k)); // 广播
+                    __m256d b = _mm256_loadu_pd(&src2.at(k, j));
+                    __m256d prod = _mm256_mul_pd(a, b);
+                    sum = _mm256_add_pd(sum, prod);
+                }
+                _mm256_storeu_pd(&dest.at(i, j), sum);
+            }
+            // 处理剩余列
+            for (int64_t j = src2.cols_ / block_size * block_size; j < src2.cols_; ++j) {
+                _Float64 sum = 0.0;
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    sum += src1.at(i, k) * src2.at(k, j);
+                }
+                dest.at(i, j) = sum;
+            }
+        }
+    } else {
+        if (start >= src2.cols_) return;
+
+        for (int64_t j = start; j < src2.cols_; j += thread_num_) {
+            for (int64_t i = 0; i < src1.rows_; i++) {
+                __m256d sum = _mm256_setzero_pd();
+                for (int64_t k = 0; k < src1.cols_; k++) {
+                    __m256d a = _mm256_set1_pd(src1.at(i, k));
+                    __m256d b = _mm256_loadu_pd(&src2.at(k, j));
+                    __m256d prod = _mm256_mul_pd(a, b);
+                    sum = _mm256_add_pd(sum, prod);
+                }
+                _mm256_storeu_pd(&dest.at(i, j), sum);
+            }
+        }
     }
 }
 
