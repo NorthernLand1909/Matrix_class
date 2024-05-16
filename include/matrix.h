@@ -19,10 +19,11 @@ public:
     Matrix(int64_t rows, int64_t cols);
     Matrix(const Matrix& other); // for copy
     Matrix(Matrix&& other) noexcept; // for move
+    Matrix(T *data, int64_t rows, int64_t cols, bool isTake);
     Matrix(Matrix& parent, int64_t rowStart, int64_t colStart, int64_t rowEnd, int64_t colEnd); // for ROI
     ~Matrix();
 
-    // for operator =
+    // for operator=
     Matrix& operator=(const Matrix& other); // for copy
     Matrix& operator=(Matrix&& other) noexcept; // for move
 
@@ -58,10 +59,11 @@ private:
     int64_t cols_offset_;
     std::shared_ptr<T> data_;
 
-    bool isFloat;
     __float128 tol_; // Judging for equlity
 
     static const int8_t thread_num_ = 16; // thread numbers
+
+    void init();
 
     static void thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t start, const int64_t end);
     static void thread_sub(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t start, const int64_t end);
@@ -69,13 +71,11 @@ private:
 };
 
 template <typename T>
-Matrix<T>::Matrix(int64_t rows, int64_t cols) {
-    if constexpr ((std::is_same<T, int8_t>::value) || (std::is_same<T, int32_t>::value) || (std::is_same<T, int64_t>::value)) {
-        isFloat = false;
-    } else if constexpr ((std::is_same<T, _Float32>::value) || (std::is_same<T, _Float64>::value) || (std::is_same<T, __float128>::value)) {
-        isFloat = true;
+void Matrix<T>::init() {
+    if constexpr ((std::is_same<T, int8_t>::value) || (std::is_same<T, int32_t>::value) || (std::is_same<T, int64_t>::value) || (std::is_same<T, _Float32>::value) || (std::is_same<T, _Float64>::value)) {
+
     } else {
-        std::cerr << "The matrix element is not supported" << std::endl;
+        throw std::invalid_argument("The matrix element is not supported");
         return;
     }
 
@@ -84,11 +84,14 @@ Matrix<T>::Matrix(int64_t rows, int64_t cols) {
         tol_ = std::numeric_limits<_Float32>::epsilon();
     } else if constexpr (std::is_same<T, _Float64>::value) {
         tol_ = std::numeric_limits<_Float64>::epsilon();
-    } else if constexpr (std::is_same<T, __float128>::value) {
-        tol_ = std::numeric_limits<__float128>::epsilon();
     } else {
         tol_ = 0.0f;
     }
+}
+
+template <typename T>
+Matrix<T>::Matrix(int64_t rows, int64_t cols) {
+    init();
 
     rows_ = rows;
     cols_ = cols;
@@ -106,10 +109,9 @@ Matrix<T>::Matrix(const Matrix& other) {
     cols_ = other.cols_;
     rows_offset_ = other.rows_offset_;
     cols_offset_ = other.cols_offset_;
-    isFloat = other.isFloat;
     tol_ = other.tol_;
 
-    data_ = std::shared_ptr(new(std::align_val_t(32)) T[rows_ * cols_]);
+    data_ = std::shared_ptr<T>(new(std::align_val_t(32)) T[rows_ * cols_]);
     std::copy(other.data_.get(), other.data_.get() + rows_ * cols_, this->data_.get());
 }
 
@@ -120,10 +122,9 @@ Matrix<T>::Matrix(Matrix&& other) noexcept {
     cols_ = other.cols_;
     rows_offset_ = other.rows_offset_;
     cols_offset_ = other.cols_offset_;
-    isFloat = other.isFloat;
     tol_ = other.tol_;
     other.data_.reset();
-    data_ = std::shared_ptr(other.data_);
+    data_ = std::shared_ptr<T>(other.data_);
 }
 
 template<typename T>
@@ -137,9 +138,27 @@ Matrix<T>::Matrix(Matrix& parent, int64_t rowStart, int64_t colStart, int64_t ro
     rows_offset_ = rowStart;
     cols_offset_ = colStart;
     data_ = std::shared_ptr(parent.data_);
-    isFloat = parent.isFloat;
     tol_ = parent.tol_;
+}
 
+template <typename T>
+Matrix<T>::Matrix(T *data, int64_t rows, int64_t cols, bool isTake) {
+    init();
+
+    rows_ = rows;
+    cols_ = cols;
+    rows_offset_ = 0;
+    cols_offset_ = 0;
+
+
+
+    if (isTake) {
+        data_ = std::shared_ptr<T>(data, std::default_delete<T>());
+    } else {
+        data_ = std::shared_ptr<T>(new(std::align_val_t(32)) T[rows_ * cols_]);
+        std::copy(data, data + rows_ * cols_, this->data_.get());
+    }
+    
 }
 
 template <typename T>
@@ -358,7 +377,7 @@ void Matrix<T>::write_file(std::ofstream& file) {
 template <typename T>
 void Matrix<T>::write_command() {
     for (int64_t i = 0; i < rows_ * cols_; i++) {
-        std::cout << at(i) << " ";
+        std::cout << (long double)at(i) << " ";
         if ((i + 1) % cols_ == 0) {
             std::cout << std::endl;
         }
@@ -830,7 +849,7 @@ void Matrix<_Float32>::thread_mul(Matrix<_Float32>& dest, const Matrix<_Float32>
 
 template <>
 void Matrix<_Float64>::thread_mul(Matrix<_Float64>& dest, const Matrix<_Float64>& src1, const Matrix<_Float64>& src2, const int64_t start, const bool isRow) {
-    const int block_size = 4; // 使用256位寄存器存储4个_Float64类型数据
+    const int block_size = 4;
 
     if (isRow) {
         if (start >= src1.rows_) return;
@@ -839,7 +858,7 @@ void Matrix<_Float64>::thread_mul(Matrix<_Float64>& dest, const Matrix<_Float64>
             for (int64_t j = 0; j < src2.cols_ / block_size * block_size; j += block_size) {
                 __m256d sum = _mm256_setzero_pd();
                 for (int64_t k = 0; k < src1.cols_; k++) {
-                    __m256d a = _mm256_set1_pd(src1.at(i, k)); // 广播
+                    __m256d a = _mm256_set1_pd(src1.at(i, k));
                     __m256d b = _mm256_loadu_pd(&src2.at(k, j));
                     __m256d prod = _mm256_mul_pd(a, b);
                     sum = _mm256_add_pd(sum, prod);
