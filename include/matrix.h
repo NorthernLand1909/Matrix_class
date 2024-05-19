@@ -62,6 +62,8 @@ private:
     int64_t cols_;
     int64_t rows_offset_;
     int64_t cols_offset_;
+    int64_t ROIrows_;
+    int64_t ROIcols_;
     std::shared_ptr<T> data_;
 
     __float128 tol_; // Judging for equlity
@@ -110,6 +112,8 @@ Matrix<T>::Matrix(int64_t rows, int64_t cols) {
     cols_ = cols;
     rows_offset_ = 0;
     cols_offset_ = 0;
+    ROIrows_ = 0;
+    ROIcols_ = 0;
 
     data_ = std::shared_ptr<T>(new(std::align_val_t(32)) T[rows_ * cols_]);
     //std::cout << "Address of first element: " << reinterpret_cast<uintptr_t>(data_.get()) << " " << reinterpret_cast<uintptr_t>(data_.get())  % 32 << std::endl;
@@ -121,6 +125,8 @@ Matrix<T>::Matrix(const Matrix& other) {
     cols_ = other.cols_;
     rows_offset_ = other.rows_offset_;
     cols_offset_ = other.cols_offset_;
+    ROIrows_ = other.ROIrows_;
+    ROIcols_ = other.ROIcols_;
     tol_ = other.tol_;
 
     data_ = std::shared_ptr<T>(new(std::align_val_t(32)) T[rows_ * cols_]);
@@ -133,20 +139,24 @@ Matrix<T>::Matrix(Matrix&& other) noexcept {
     cols_ = other.cols_;
     rows_offset_ = other.rows_offset_;
     cols_offset_ = other.cols_offset_;
+    ROIrows_ = other.ROIrows_;
+    ROIcols_ = other.ROIcols_;
     tol_ = other.tol_;
     data_ = std::shared_ptr<T>(other.data_);
 }
 
 template<typename T>
-Matrix<T>::Matrix(Matrix& parent, int64_t rowStart, int64_t colStart, int64_t rowEnd, int64_t colEnd) {
-    if (rowStart < 0 || colStart < 0 || rowEnd > parent.rows_ || colEnd > parent.cols_ || rowStart > rowEnd || colStart > colEnd) {
+Matrix<T>::Matrix(Matrix& parent, int64_t rowStart, int64_t rowEnd, int64_t colStart, int64_t colEnd) {
+    if (rowStart < 0 || colStart < 0 || rowEnd > parent.getRow() || colEnd > parent.getRow() || rowStart > rowEnd || colStart > colEnd) {
         throw std::invalid_argument("Invalid ROI bounds");
     }
 
-    rows_ = rowEnd - rowStart + 1;
-    cols_ = colEnd - colStart + 1;
-    rows_offset_ = rowStart;
-    cols_offset_ = colStart;
+    rows_ = parent.rows_;
+    cols_ = parent.cols_;
+    ROIrows_ = rowEnd - rowStart + 1;
+    ROIcols_ = colEnd - colStart + 1;
+    rows_offset_ = rowStart + parent.rows_offset_;
+    cols_offset_ = colStart + parent.cols_offset_;
     data_ = std::shared_ptr<T>(parent.data_);
     tol_ = parent.tol_;
 }
@@ -159,6 +169,8 @@ Matrix<T>::Matrix(T *data, int64_t rows, int64_t cols, bool isTake) {
     cols_ = cols;
     rows_offset_ = 0;
     cols_offset_ = 0;
+    ROIrows_ = 0;
+    ROIcols_ = 0;
 
 
 
@@ -181,6 +193,8 @@ Matrix<T>& Matrix<T>::operator=(const Matrix& other) {
         this->data_.reset();
         this->rows_ = other.rows_;
         this->cols_ = other.cols_;
+        this->ROIrows_ = other.ROIrows_;
+        this->ROIcols_ = other.ROIcols_;
         data_ = std::shared_ptr<T>(new(std::align_val_t(32)) T[rows_ * cols_]);
         std::copy(other.data_.get(), other.data_.get() + rows_ * cols_, this->data_.get());
     } else {
@@ -195,6 +209,8 @@ Matrix<T>& Matrix<T>::operator=(Matrix&& other) noexcept {
         this->data_.reset();
         this->rows_ = other.rows_;
         this->cols_ = other.cols_;
+        this->ROIrows_ = other.ROIrows_;
+        this->ROIcols_ = other.ROIcols_;
         this->data_ = std::shared_ptr<T>(other.data_);
     } else {
         std::cerr << "= is used for two identical objects." << std::endl;
@@ -332,7 +348,7 @@ T& Matrix<T>::at(int64_t row, int64_t col) {
     if (row >= getRow() || col >= getCol()) {
         throw std::invalid_argument("Matrix index out of bound");
     }
-    return data_.get()[(row + rows_offset_) * getCol() + col + cols_offset_];
+    return data_.get()[(row + rows_offset_) * cols_ + col + cols_offset_];
 }
 
 template <typename T>
@@ -341,7 +357,7 @@ const T& Matrix<T>::at(int64_t row, int64_t col) const {
     if (row >= getRow() || col >= getCol()) {
         throw std::invalid_argument("Matrix index out of bound");
     }
-    return data_.get()[(row + rows_offset_) * getCol() + col + cols_offset_];
+    return data_.get()[(row + rows_offset_) * cols_ + col + cols_offset_];
 }
 
 template <typename T>
@@ -349,7 +365,7 @@ T& Matrix<T>::at(int64_t pos) {
     if (pos >= getRow() * getCol()) {
         throw std::invalid_argument("Matrix index out of bound");
     }
-    return data_.get()[pos + rows_offset_ * getCol() + cols_offset_];
+    return data_.get()[pos + rows_offset_ * cols_ + cols_offset_];
 }
 
 template <typename T>
@@ -358,17 +374,17 @@ const T& Matrix<T>::at(int64_t pos) const {
         throw std::invalid_argument("Matrix index out of bound");
     }
     //printf("finding %ld \n", pos + rows_offset_ * getCol() + cols_offset_);
-    return data_.get()[pos + rows_offset_ * getCol() + cols_offset_];
+    return data_.get()[pos + rows_offset_ * cols_ + cols_offset_];
 }
 
 template <typename T>
 const int64_t Matrix<T>::getRow() const {
-    return rows_;
+    return isROI() ? ROIrows_ : rows_;
 }
 
 template <typename T>
 const int64_t Matrix<T>::getCol() const {
-    return cols_;
+    return isROI() ? ROIcols_ : cols_;
 }
 
 template <typename T>
@@ -404,11 +420,11 @@ void Matrix<T>::write_file(std::ofstream& file) {
 
 template <typename T>
 void Matrix<T>::write_command() {
-    for (int64_t i = 0; i < getRow() * getCol(); i++) {
-        std::cout << (long double)at(i) << " ";
-        if ((i + 1) % getCol() == 0) {
-            std::cout << std::endl;
+    for (int64_t i = 0; i < getRow(); i++) {
+        for (int64_t j = 0; j < getCol(); j++) {
+            std::cout << (long double)at(i, j) << " ";
         }
+        std::cout << std::endl;
     }
     std::cout << std::endl;
 }

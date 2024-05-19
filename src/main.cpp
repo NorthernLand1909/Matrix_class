@@ -153,9 +153,13 @@ void test_ROI() {
         parent.at(i) = arr1[i];
     }
 
-    Matrix<T> child(parent, 2, 2, 2, 5);
+    Matrix<T> child(parent, 2, 3, 2, 4);
     std::cout << "son is" << std::endl;
     child.write_command();
+
+    Matrix<T> child_child(child, 0, 1, 1, 2);
+    std::cout << "son's son is" << std::endl;
+    child_child.write_command();
 }
 
 template <typename T>
