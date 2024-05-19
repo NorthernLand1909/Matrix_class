@@ -129,6 +129,36 @@ void test_mul(T *arr1, T* arr2, int row1, int col1, int col2) {
 }
 
 template <typename T>
+void test_unequal(T *arr1, T* arr2, int row, int col) {
+    Matrix<T> src1(row, col);
+    Matrix<T> src2(row, col);
+    for (int i = 0; i < row * col; i++) {
+        src1.at(i) = arr1[i];
+    }
+
+    for (int i = 0; i < row * col; i++) {
+        src2.at(i) = arr2[i];
+    }
+    std::cout << "Is arr1 and arr2 equal? : " << (src1 == src2) << std::endl;
+}
+
+template <typename T>
+void test_ROI() {
+    std::cout << "test for ROI" << std::endl;
+    T *arr1 = generate_arr<T>(20, -5, 5);
+    std::cout << "parent is :" << std::endl;
+    print_ma<T>(arr1, 4, 5);
+    Matrix<T> parent(4, 5);
+    for (int i = 0; i < 20; i++) {
+        parent.at(i) = arr1[i];
+    }
+
+    Matrix<T> child(parent, 2, 2, 2, 5);
+    std::cout << "son is" << std::endl;
+    child.write_command();
+}
+
+template <typename T>
 void test_all() {
     //generate arr
     T* arr1 = generate_arr<T>(200000, -10, 10);
@@ -137,6 +167,8 @@ void test_all() {
     test_add<T>(arr1, arr2, 500, 400);
     test_minus<T>(arr1, arr2, 500, 400);
     test_mul<T>(arr1, arr2, 400, 500, 400);
+    test_unequal<T>(arr1, arr2, 500, 400);
+    test_ROI<T>();
 
     delete[] arr1;
     delete[] arr2;

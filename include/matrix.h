@@ -34,16 +34,21 @@ public:
 
     // for arthimetic
     // only matrices with correct size are supported!
-    Matrix operator+(const Matrix& other) const;
-    Matrix operator-(const Matrix& other) const;
-    Matrix operator*(const Matrix& other) const;
+    Matrix operator+(const Matrix<T>& other) const;
+    Matrix operator-(const Matrix<T>& other) const;
+    Matrix operator*(const Matrix<T>& other) const;
 
 
-    // others
+    // look up for the matrix
     T& at(int64_t row, int64_t col); // look for element
     T& at(int64_t pos); // directly look for corresponding position of the array
     const T& at(int64_t row, int64_t col) const;
     const T& at(int64_t pos) const;
+
+    const int64_t getRow() const;
+    const int64_t getCol() const;
+
+    const bool isROI() const;
 
     // IO
     void read_file(std::ifstream& file);
@@ -63,7 +68,7 @@ private:
 
     static const int8_t thread_num_ = 16; // thread numbers
 
-    void init();
+    void init(int64_t row, int64_t col);
 
     static void thread_add(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t start, const int64_t end);
     static void thread_sub(Matrix& dest, const Matrix& src1, const Matrix& src2, const int64_t start, const int64_t end);
@@ -71,19 +76,27 @@ private:
 };
 
 template <typename T>
-void Matrix<T>::init() {
-    if constexpr ((std::is_same<T, int8_t>::value) || (std::is_same<T, int32_t>::value) || (std::is_same<T, int64_t>::value) || (std::is_same<T, _Float32>::value) || (std::is_same<T, _Float64>::value)) {
-
+void Matrix<T>::init(int64_t row, int64_t col) {
+    if constexpr (
+    std::is_same<T, int8_t>::value ||
+    std::is_same<T, int16_t>::value ||
+    std::is_same<T, int32_t>::value ||
+    std::is_same<T, int64_t>::value ||
+    std::is_same<T, _Float32>::value ||
+    std::is_same<T, _Float64>::value ||
+    std::is_same<T, uint8_t>::value ||
+    std::is_same<T, uint16_t>::value ||
+    std::is_same<T, uint32_t>::value ||
+    std::is_same<T, uint64_t>::value) {
     } else {
         throw std::invalid_argument("The matrix element is not supported");
-        return;
     }
 
 
     if constexpr (std::is_same<T, _Float32>::value) {
-        tol_ = std::numeric_limits<_Float32>::epsilon();
+        tol_ = 3 * row * col * std::numeric_limits<_Float32>::epsilon();
     } else if constexpr (std::is_same<T, _Float64>::value) {
-        tol_ = std::numeric_limits<_Float64>::epsilon();
+        tol_ = 3 * row * col * std::numeric_limits<_Float64>::epsilon();
     } else {
         tol_ = 0.0f;
     }
@@ -91,7 +104,7 @@ void Matrix<T>::init() {
 
 template <typename T>
 Matrix<T>::Matrix(int64_t rows, int64_t cols) {
-    init();
+    init(rows, cols);
 
     rows_ = rows;
     cols_ = cols;
@@ -104,7 +117,6 @@ Matrix<T>::Matrix(int64_t rows, int64_t cols) {
 
 template <typename T>
 Matrix<T>::Matrix(const Matrix& other) {
-    this->data_.reset();
     rows_ = other.rows_;
     cols_ = other.cols_;
     rows_offset_ = other.rows_offset_;
@@ -117,13 +129,11 @@ Matrix<T>::Matrix(const Matrix& other) {
 
 template <typename T>
 Matrix<T>::Matrix(Matrix&& other) noexcept {
-    this->data_.reset();
     rows_ = other.rows_;
     cols_ = other.cols_;
     rows_offset_ = other.rows_offset_;
     cols_offset_ = other.cols_offset_;
     tol_ = other.tol_;
-    other.data_.reset();
     data_ = std::shared_ptr<T>(other.data_);
 }
 
@@ -137,13 +147,13 @@ Matrix<T>::Matrix(Matrix& parent, int64_t rowStart, int64_t colStart, int64_t ro
     cols_ = colEnd - colStart + 1;
     rows_offset_ = rowStart;
     cols_offset_ = colStart;
-    data_ = std::shared_ptr(parent.data_);
+    data_ = std::shared_ptr<T>(parent.data_);
     tol_ = parent.tol_;
 }
 
 template <typename T>
 Matrix<T>::Matrix(T *data, int64_t rows, int64_t cols, bool isTake) {
-    init();
+    init(rows, cols);
 
     rows_ = rows;
     cols_ = cols;
@@ -173,6 +183,8 @@ Matrix<T>& Matrix<T>::operator=(const Matrix& other) {
         this->cols_ = other.cols_;
         data_ = std::shared_ptr<T>(new(std::align_val_t(32)) T[rows_ * cols_]);
         std::copy(other.data_.get(), other.data_.get() + rows_ * cols_, this->data_.get());
+    } else {
+        std::cerr << "= is used for two identical objects." << std::endl;
     }
     return *this;
 }
@@ -183,15 +195,16 @@ Matrix<T>& Matrix<T>::operator=(Matrix&& other) noexcept {
         this->data_.reset();
         this->rows_ = other.rows_;
         this->cols_ = other.cols_;
-        other.data_.reset();
-        this->data_ = std::shared_ptr(other.data_);
+        this->data_ = std::shared_ptr<T>(other.data_);
+    } else {
+        std::cerr << "= is used for two identical objects." << std::endl;
     }
     return *this;
 }
 
 template <typename T>
 bool Matrix<T>::operator==(const Matrix& other) const {
-    if (rows_ != other.rows_ || cols_ != other.cols_) {
+    if (getRow() != other.getRow() || getCol() != other.getCol()) {
         std::cerr << "Matrices with different size are compared." << std::endl;
         return false;
     }
@@ -214,8 +227,8 @@ bool Matrix<T>::operator!=(const Matrix& other) const {
 }
 
 template <typename T>
-Matrix<T> Matrix<T>::operator+(const Matrix& other) const {
-    if (rows_ != other.rows_ || cols_ != other.cols_) {
+Matrix<T> Matrix<T>::operator+(const Matrix<T>& other) const {
+    if (getRow() != other.getRow() || getCol() != other.getCol()) {
         throw std::invalid_argument("Matrices with different sizes cannot be added.");
     }
 
@@ -250,8 +263,8 @@ Matrix<T> Matrix<T>::operator+(const Matrix& other) const {
 }
 
 template <typename T>
-Matrix<T> Matrix<T>::operator-(const Matrix& other) const {
-    if (rows_ != other.rows_ || cols_ != other.cols_) {
+Matrix<T> Matrix<T>::operator-(const Matrix<T>& other) const {
+    if (getRow() != other.getRow() || getCol() != other.getCol()) {
         throw std::invalid_argument("Matrices with different sizes cannot be subtracted.");
     }
 
@@ -288,8 +301,8 @@ Matrix<T> Matrix<T>::operator-(const Matrix& other) const {
 
 
 template <typename T>
-Matrix<T> Matrix<T>::operator*(const Matrix& other) const {
-    if (cols_ != other.rows_) {
+Matrix<T> Matrix<T>::operator*(const Matrix<T>& other) const {
+    if (getCol() != other.getRow()) {
         throw std::invalid_argument("Matrices with incorrect size are multiplied.");
     }
 
@@ -346,6 +359,21 @@ const T& Matrix<T>::at(int64_t pos) const {
     }
     //printf("finding %ld \n", pos + rows_offset_ * cols_ + cols_offset_);
     return data_.get()[pos + rows_offset_ * cols_ + cols_offset_];
+}
+
+template <typename T>
+const int64_t Matrix<T>::getRow() const {
+    return rows_offset_ == 0 ? rows_ : rows_offset_;
+}
+
+template <typename T>
+const int64_t Matrix<T>::getCol() const {
+    return cols_offset_ == 0 ? cols_ : cols_offset_;
+}
+
+template <typename T>
+const bool Matrix<T>::isROI() const {
+    return (rows_offset_ == 0 && cols_offset_ == 0);
 }
 
 template <typename T>
